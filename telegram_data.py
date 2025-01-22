@@ -4,12 +4,15 @@ import datetime
 import asyncio
 
 # MongoDB connection
-mongo_client = MongoClient("mongodb://localhost:27017/")
+# mongo_client = MongoClient("mongodb://localhost:27017/")
+
+mongo_client = MongoClient("mongodb://mongo:27017/")
+
 db = mongo_client["telegram_data"]
 messages_collection = db["messages"]
 chats_collection = db["chats"]
 
-# ایجاد ایندکس برای جلوگیری از ذخیره داده‌های تکراری
+
 messages_collection.create_index([("message_id", 1)], unique=True)
 chats_collection.create_index([("chat_id", 1)], unique=True)
 
@@ -20,12 +23,11 @@ phone_number = "+989370756304"
 client = TelegramClient('session_name', api_id, api_hash)
 
 # ذخیره پیام‌ها در دیتابیس MongoDB
-# ذخیره پیام‌ها در دیتابیس MongoDB
 def save_messages(chat_name, chat_id, messages):
     chat_data = {
         "chat_id": chat_id,
         "chat_name": chat_name,
-        'information': [{'نام و نام خانوادکی': ''}, {'سن': ''}, {'شهر': ''}],
+        'information': [],
         'del-information': []
     }
     try:
