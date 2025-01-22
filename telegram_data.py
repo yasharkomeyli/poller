@@ -22,7 +22,6 @@ phone_number = "+989370756304"
 
 client = TelegramClient('session_name', api_id, api_hash)
 
-# ذخیره پیام‌ها در دیتابیس MongoDB
 def save_messages(chat_name, chat_id, messages):
     chat_data = {
         "chat_id": chat_id,
@@ -94,9 +93,7 @@ def save_messages(chat_name, chat_id, messages):
 
 
 def flag_deleted_messages(chat_id, fetched_message_ids):
-    """
-    چک کردن پیام‌های پاک‌شده و علامت‌گذاری آنها به عنوان redFlag
-    """
+
     # پیام‌های موجود در دیتابیس برای این چت
     db_messages = messages_collection.find({"chat_id": chat_id})
 
@@ -110,7 +107,6 @@ def flag_deleted_messages(chat_id, fetched_message_ids):
             print(f"Message with ID {message['message_id']} flagged as deleted (redFlag=True).")
 
 
-# اسکن پیام‌ها هر 30 ثانیه
 async def fetch_messages_every_30_seconds():
     while True:
         print(f"Starting update at {datetime.datetime.now()}...")
@@ -128,7 +124,6 @@ async def main():
     await client.start(phone=phone_number)
     print("Logged in successfully!")
 
-    # اجرای اسکن پیام‌ها و ارسال پیام به صورت موازی
     await asyncio.gather(
         fetch_messages_every_30_seconds(),
     )
