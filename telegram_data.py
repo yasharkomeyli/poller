@@ -118,7 +118,7 @@ async def fetch_messages_every_30_seconds():
             messages = await client.get_messages(dialog, limit=1000)
             save_messages(chat_name, chat_id, messages)
         print("Waiting for 30 seconds before next scan...")
-        await asyncio.sleep(5)
+        await asyncio.sleep(30)
 
 async def main():
     await client.start(phone=phone_number)
