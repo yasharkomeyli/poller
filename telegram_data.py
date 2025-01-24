@@ -4,9 +4,9 @@ import datetime
 import asyncio
 
 # MongoDB connection
-mongo_client = MongoClient("mongodb://localhost:27017/")
+# mongo_client = MongoClient("mongodb://localhost:27017/")
 
-# mongo_client = MongoClient("mongodb://mongo:27017/")
+mongo_client = MongoClient("mongodb://mongo:27017/")
 
 db = mongo_client["telegram_data"]
 messages_collection = db["messages"]
