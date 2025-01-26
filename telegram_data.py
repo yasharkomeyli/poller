@@ -48,10 +48,15 @@ def save_messages(chat_name, chat_id, messages):
                 "chat_name": chat_name,
                 "message_id": message.id,
                 "sender_id": message.sender_id,
-                "text": [message.text],
+                "sender_username": message.sender.username if message.sender else None,
+                "is_outgoing": message.out,
+                "text": [message.text],  # ذخیره متن به‌صورت لیست
                 "date": message.date.strftime("%Y-%m-%d %H:%M:%S") if message.date else None,
+                "reply_to_msg_id": message.reply_to_msg_id if hasattr(message, "reply_to_msg_id") else None,
                 "is_edited": True if message.edit_date else False,
                 "edit_date": message.edit_date.strftime("%Y-%m-%d %H:%M:%S") if message.edit_date else None,
+                "redFlag": False,
+                'mantegh': []
             }
 
             # بررسی وجود پیام در دیتابیس
