@@ -19,7 +19,7 @@ chats_collection.create_index([("chat_id", 1)], unique=True)
 
 api_id = "22435091"
 api_hash = "da17125c6dd25732caad68a778f69568"
-phone_number = "+989370756304"
+phone_number = "+989336531403"
 
 client = TelegramClient('session_name', api_id, api_hash)
 
