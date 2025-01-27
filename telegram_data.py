@@ -28,8 +28,6 @@ def save_messages(chat_name, chat_id, messages):
     chat_data = {
         "chat_id": chat_id,
         "chat_name": chat_name,
-        'information': [],
-        'del-information': []
     }
 
     try:
