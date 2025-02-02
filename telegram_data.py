@@ -2,12 +2,12 @@ from telethon.sync import TelegramClient
 from pymongo import MongoClient
 import datetime
 import asyncio
-from pymongo import InsertOne  # این خط را اضافه کنید
+from pymongo import InsertOne
 from pymongo.errors import DuplicateKeyError, BulkWriteError
 # MongoDB connection
-# mongo_client = MongoClient("mongodb://localhost:27017/")
+mongo_client = MongoClient("mongodb://localhost:27017/")
 
-mongo_client = MongoClient("mongodb://mongo:27017/")
+# mongo_client = MongoClient("mongodb://mongo:27017/")
 
 db = mongo_client["telegram_data"]
 messages_collection = db["messages"]
@@ -19,7 +19,7 @@ chats_collection.create_index([("chat_id", 1)], unique=True)
 
 api_id = "22435091"
 api_hash = "da17125c6dd25732caad68a778f69568"
-phone_number = "+989370756304"
+phone_number = "+989336531403"
 
 client = TelegramClient('session_name', api_id, api_hash)
 
