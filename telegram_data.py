@@ -5,9 +5,9 @@ import asyncio
 from pymongo import InsertOne  # این خط را اضافه کنید
 from pymongo.errors import DuplicateKeyError, BulkWriteError
 # MongoDB connection
-mongo_client = MongoClient("mongodb://localhost:27017/")
+# mongo_client = MongoClient("mongodb://localhost:27017/")
 
-# mongo_client = MongoClient("mongodb://mongo:27017/")
+mongo_client = MongoClient("mongodb://mongo:27017/")
 
 db = mongo_client["telegram_data"]
 messages_collection = db["messages"]
