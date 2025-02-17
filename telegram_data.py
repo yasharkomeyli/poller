@@ -1,10 +1,12 @@
 import os
+import datetime
 import asyncio
 import pytz
+
 from telethon import TelegramClient, events
 from pymongo import MongoClient
 
-# ایجاد دایرکتوری ذخیره عکس‌های پروفایل
+# ایجاد دایرکتوری برای ذخیره عکس‌های پروفایل (در صورت عدم وجود)
 os.makedirs("profile_photos", exist_ok=True)
 
 # اتصال به MongoDB
@@ -15,6 +17,10 @@ db = mongo_client["telegram_data"]
 messages_collection = db["messages"]
 chats_collection = db["chats"]
 
+# ایجاد ایندکس‌ها
+messages_collection.create_index([("message_id", 1)], unique=True)
+chats_collection.create_index([("chat_id", 1)], unique=True)
+
 # تنظیمات API تلگرام
 API_ID = "22435091"
 API_HASH = "da17125c6dd25732caad68a778f69568"
@@ -24,96 +30,217 @@ client = TelegramClient('session_name', API_ID, API_HASH)
 tehran_tz = pytz.timezone("Asia/Tehran")
 
 
-async def fetch_and_store_initial_data():
-    """ دریافت و ذخیره اطلاعات اولیه‌ی چت‌ها و پیام‌ها در دیتابیس (فقط در اجرای اول) """
-    dialogs = await client.get_dialogs()
+async def update_chat_details(chat):
+    """
+    این تابع اطلاعات کاربر از شی چت (مانند username و عکس پروفایل) را دریافت و در
+    کالکشن chats ذخیره می‌کند.
+    """
+    chat_id = chat.id if hasattr(chat, 'id') else None
+    if not chat_id:
+        return
 
-    for dialog in dialogs:
-        chat = dialog.entity
-        chat_id = chat.id
-        chat_name = getattr(chat, "title", getattr(chat, "first_name", "Private Chat"))
+    # دریافت نام کاربری (username) در صورتی که وجود داشته باشد
+    chat_username = getattr(chat, 'username', None)
 
-        # ذخیره‌ی اطلاعات چت در دیتابیس
+    # دانلود عکس پروفایل (در صورت وجود)
+    profile_photo_path = None
+    if hasattr(chat, 'photo') and chat.photo:
+        try:
+            # عکس پروفایل در دایرکتوری "profile_photos" با نام {chat_id}.jpg ذخیره می‌شود.
+            profile_photo_path = await client.download_profile_photo(chat, file=f"profile_photos/{chat_id}.jpg")
+        except Exception as e:
+            print(f"Error downloading profile photo for chat {chat_id}: {e}")
+
+    # به‌روزرسانی اطلاعات چت در دیتابیس
+    chat_update_data = {
+        "username": chat_username,
+        "profile_photo": profile_photo_path
+    }
+    chats_collection.update_one({"chat_id": chat_id}, {"$set": chat_update_data}, upsert=True)
+
+
+def save_messages(chat_name, chat_id, messages):
+    # پیدا کردن جدیدترین پیام برای تعیین last_message_date
+    last_msg = None
+    for msg in messages:
+        if msg.date:
+            if last_msg is None or msg.date > last_msg.date:
+                last_msg = msg
+
+    # تبدیل تاریخ به منطقه زمانی تهران
+    if last_msg and last_msg.date:
+        last_message_date = last_msg.date.astimezone(tehran_tz)
+        last_message_text = last_msg.text if last_msg.text else ""
+    else:
+        last_message_date = None
+        last_message_text = ""
+
+    # به‌روزرسانی اطلاعات چت در دیتابیس (فیلد unread_count در اینجا تغییر نمی‌کند)
+    chat_data = {
+        "chat_id": chat_id,
+        "chat_name": chat_name,
+        "last_message_date": last_message_date.strftime("%Y-%m-%d %H:%M:%S") if last_message_date else None,
+        "last_message_text": last_message_text
+    }
+    try:
         chats_collection.update_one(
             {"chat_id": chat_id},
-            {"$set": {
-                "chat_name": chat_name,
-                "unread_count": dialog.unread_count  # ذخیره تعداد پیام‌های خوانده نشده
-            }},
+            {"$set": chat_data},
             upsert=True
         )
+        print(f"Updated chat: {chat_name} - Last message at: {last_message_date}")
+    except Exception as e:
+        print(f"Chat update error: {e}")
 
-        # دریافت و ذخیره‌ی آخرین پیام‌های چت
-        messages = await client.get_messages(chat_id, limit=50)
-        for msg in messages:
-            if not messages_collection.find_one({"message_id": msg.id}):
-                messages_collection.insert_one(build_message_object(msg, chat_id, chat_name))
+    # ذخیره پیام‌ها (برای هر پیام، اطلاعات ذخیره می‌شود)
+    for msg in messages:
+        if msg.text:
+            update_message_data(msg, chat_id, chat_name)
 
-    print("✅ اطلاعات اولیه چت‌ها و پیام‌ها ذخیره شد!")
+
+def update_message_data(msg, chat_id, chat_name):
+    existing = messages_collection.find_one({"message_id": msg.id})
+    if existing:
+        if msg.edit_date:
+            handle_edited_message(existing, msg)
+        return
+    try:
+        message_data = build_message_object(msg, chat_id, chat_name)
+        messages_collection.insert_one(message_data)
+    except Exception as e:
+        print("Error inserting message:", e)
+
+
+def handle_edited_message(existing, msg):
+    text_list = existing["text"]
+    if isinstance(text_list, str):
+        text_list = [text_list]
+    if msg.text not in text_list:
+        text_list.append(msg.text)
+        messages_collection.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {
+                "text": text_list,
+                "is_edited": True,
+                "edit_date": msg.edit_date.strftime("%Y-%m-%d %H:%M:%S")
+            }}
+        )
 
 
 def build_message_object(msg, chat_id, chat_name):
-    """ ساخت آبجکت پیام برای ذخیره در دیتابیس """
     msg_date = msg.date.astimezone(tehran_tz) if msg.date else None
+    edit_date = msg.edit_date.astimezone(tehran_tz) if msg.edit_date else None
+
     return {
         "chat_id": chat_id,
         "chat_name": chat_name,
         "message_id": msg.id,
         "sender_id": msg.sender_id,
-        "text": msg.text,
+        "username": [],  # در صورت نیاز می‌توانید اطلاعات بیشتر در اینجا اضافه کنید
+        "sender_username": getattr(msg.sender, 'username', None),
+        "is_outgoing": msg.out,
+        "text": [msg.text],
         "date": msg_date.strftime("%Y-%m-%d %H:%M:%S") if msg_date else None,
+        "reply_to_msg_id": msg.reply_to_msg_id,
         "is_edited": bool(msg.edit_date),
-        "redFlag": False
+        "edit_date": edit_date.strftime("%Y-%m-%d %H:%M:%S") if edit_date else None,
+        "redFlag": False,
+        "mantegh": [],
     }
 
 
 @client.on(events.NewMessage)
 async def new_message_handler(event):
-    """ ذخیره پیام جدید و افزایش تعداد پیام‌های خوانده نشده """
+    """ ذخیره پیام جدید و افزایش unread_count + ذخیره آخرین پیام """
     msg = event.message
     chat = await event.get_chat()
     chat_id = chat.id
     chat_name = getattr(chat, "title", getattr(chat, "first_name", "Private Chat"))
 
+    # تبدیل تاریخ به فرمت قابل خواندن
+    last_message_date = msg.date.astimezone(tehran_tz) if msg.date else None
+    last_message_text = msg.text if msg.text else ""
+
+    # ذخیره پیام جدید در دیتابیس
     messages_collection.insert_one(build_message_object(msg, chat_id, chat_name))
 
-    # افزایش تعداد پیام‌های خوانده نشده فقط برای پیام‌های دریافتی
+    # آپدیت اطلاعات چت با آخرین پیام و تاریخش
+    update_data = {
+        "last_message_text": last_message_text,
+        "last_message_date": last_message_date.strftime("%Y-%m-%d %H:%M:%S") if last_message_date else None
+    }
+
+    # افزایش unread_count فقط برای پیام‌های دریافتی
     if not msg.out:
-        chats_collection.update_one(
-            {"chat_id": chat_id},
-            {"$inc": {"unread_count": 1}},
-            upsert=True
-        )
-        print(f"🔵 پیام جدید در {chat_name} | unread_count افزایش یافت")
+        update_data["$inc"] = {"unread_count": 1}
+
+    chats_collection.update_one({"chat_id": chat_id}, {"$set": update_data}, upsert=True)
+
+    print(f"🔵 پیام جدید در {chat_name} | آخرین پیام ذخیره شد")
 
 
-@client.on(events.MessageRead)
-async def message_read_handler(event):
-    """ صفر کردن تعداد پیام‌های خوانده نشده هنگام خواندن چت """
-    chat_id = event.chat_id or getattr(event, 'peer_id', None)
-    if chat_id:
-        chats_collection.update_one(
-            {"chat_id": chat_id},
-            {"$set": {"unread_count": 0}}
-        )
-        print(f"✅ پیام‌های چت {chat_id} خوانده شدند (unread_count = 0)")
+@client.on(events.MessageEdited)
+async def message_edited_handler(event):
+    msg = event.message
+    try:
+        chat = await event.get_chat()
+        if hasattr(chat, 'title') and chat.title:
+            chat_name = chat.title
+        elif hasattr(chat, 'first_name') and chat.first_name:
+            chat_name = chat.first_name
+        else:
+            chat_name = "Private Chat"
+        chat_id = chat.id if hasattr(chat, 'id') else event.chat_id
+    except Exception as e:
+        print("Error fetching chat info:", e)
+        chat_name = "Unknown Chat"
+        chat_id = event.chat_id
+        chat = None
+
+    # به‌روزرسانی اطلاعات کاربر در صورت امکان
+    if chat:
+        await update_chat_details(chat)
+
+    update_message_data(msg, chat_id, chat_name)
 
 
 @client.on(events.MessageDeleted)
 async def message_deleted_handler(event):
-    """ علامت‌گذاری پیام حذف‌شده با RedFlag """
+    # هنگامی که پیام حذف می‌شود، آن را با redFlag علامت‌گذاری می‌کنیم.
     for msg_id in event.deleted_ids:
         messages_collection.update_one(
             {"message_id": msg_id},
             {"$set": {"redFlag": True}}
         )
-        print(f"🚨 پیام {msg_id} حذف شد و علامت‌گذاری شد")
+        print(f"Message {msg_id} flagged as deleted.")
+
+
+@client.on(events.MessageRead)
+async def message_read_handler(event):
+    """
+    وقتی کاربر پیام‌های یک چت را می‌خواند (مثلاً با باز کردن چت در تلگرام)،
+    این رویداد trigger شده و تعداد unread_count آن چت به 0 تنظیم می‌شود.
+    """
+    # تلاش برای به‌دست آوردن chat_id از event
+    chat_id = getattr(event, 'chat_id', None)
+    if chat_id is None:
+        # در صورتی که chat_id مستقیماً موجود نباشد، تلاش می‌کنیم از فیلدهای احتمالی استفاده کنیم
+        chat_id = getattr(event, 'peer_id', None)
+    if chat_id is None:
+        print("Unable to determine chat_id for MessageRead event")
+        return
+
+    chats_collection.update_one(
+        {"chat_id": chat_id},
+        {"$set": {"unread_count": 0}},
+        upsert=True
+    )
+    print(f"Reset unread_count for chat {chat_id} due to read event")
 
 
 async def main():
     await client.start(PHONE_NUMBER)
-    await fetch_and_store_initial_data()
-    print("🚀 برنامه در حال اجراست...")
+    print("Connected as user. Waiting for new messages and read events...")
     await client.run_until_disconnected()
 
 
