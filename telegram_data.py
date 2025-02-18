@@ -166,15 +166,16 @@ async def new_message_handler(event):
 
     # آپدیت اطلاعات چت با آخرین پیام و تاریخش
     update_data = {
-        "last_message_text": last_message_text,
-        "last_message_date": last_message_date.strftime("%Y-%m-%d %H:%M:%S") if last_message_date else None
+        "$set": {
+            "last_message_text": last_message_text,
+            "last_message_date": last_message_date.strftime("%Y-%m-%d %H:%M:%S") if last_message_date else None
+        }
     }
 
-    # افزایش unread_count فقط برای پیام‌های دریافتی
     if not msg.out:
         update_data["$inc"] = {"unread_count": 1}
 
-    chats_collection.update_one({"chat_id": chat_id}, {"$set": update_data}, upsert=True)
+    chats_collection.update_one({"chat_id": chat_id}, update_data, upsert=True)
 
     print(f"🔵 پیام جدید در {chat_name} | آخرین پیام ذخیره شد")
 
