@@ -4,6 +4,7 @@ import asyncio
 import pytz
 from telethon import TelegramClient, events
 from pymongo import MongoClient
+import jdatetime
 
 # ایجاد دایرکتوری برای ذخیره عکس‌های پروفایل (در صورت عدم وجود)
 os.makedirs("profile_photos", exist_ok=True)
@@ -53,36 +54,34 @@ async def update_chat_details(chat):
 
 
 def save_messages(chat_name, chat_id, messages):
-    """
-    ذخیره پیام‌های دریافت شده و آپدیت اطلاعات چت (مانند آخرین پیام و تاریخش).
-    """
-    # پیدا کردن جدیدترین پیام جهت تعیین آخرین پیام
     last_msg = None
     for msg in messages:
         if msg.date:
             if last_msg is None or msg.date > last_msg.date:
                 last_msg = msg
 
-    if last_msg and last_msg.date:
-        last_message_date = last_msg.date.astimezone(tehran_tz)
-        last_message_text = last_msg.text if last_msg.text else ""
-    else:
-        last_message_date = None
-        last_message_text = ""
+    def to_shamsi(dt):
+        if dt:
+            shamsi_date = jdatetime.datetime.fromgregorian(datetime=dt)
+            return shamsi_date.strftime("%Y-%m-%d %H:%M:%S")
+        return None
+
+    last_message_date = to_shamsi(last_msg.date) if last_msg and last_msg.date else None
+    last_message_text = last_msg.text if last_msg and last_msg.text else ""
 
     chat_data = {
         "chat_id": chat_id,
         "chat_name": chat_name,
-        "last_message_date": last_message_date.strftime("%Y-%m-%d %H:%M:%S") if last_message_date else None,
+        "last_message_date": last_message_date,
         "last_message_text": last_message_text
     }
+
     try:
         chats_collection.update_one({"chat_id": chat_id}, {"$set": chat_data}, upsert=True)
         print(f"Updated chat: {chat_name} - Last message at: {last_message_date}")
     except Exception as e:
         print(f"Chat update error: {e}")
 
-    # ذخیره هر پیام دریافت شده
     for msg in messages:
         if msg.text:
             update_message_data(msg, chat_id, chat_name)
@@ -121,22 +120,29 @@ def build_message_object(msg, chat_id, chat_name):
     msg_date = msg.date.astimezone(tehran_tz) if msg.date else None
     edit_date = msg.edit_date.astimezone(tehran_tz) if msg.edit_date else None
 
+    def to_shamsi(dt):
+        if dt:
+            shamsi_date = jdatetime.datetime.fromgregorian(datetime=dt)
+            return shamsi_date.strftime("%Y-%m-%d %H:%M:%S")
+        return None
+
     return {
         "chat_id": chat_id,
         "chat_name": chat_name,
         "message_id": msg.id,
         "sender_id": msg.sender_id,
-        "username": [],  # در صورت نیاز اطلاعات اضافی اضافه شود
+        "username": [],
         "sender_username": getattr(msg.sender, 'username', None),
         "is_outgoing": msg.out,
         "text": [msg.text],
-        "date": msg_date.strftime("%Y-%m-%d %H:%M:%S") if msg_date else None,
+        "date": to_shamsi(msg_date),
         "reply_to_msg_id": msg.reply_to_msg_id,
         "is_edited": bool(msg.edit_date),
-        "edit_date": edit_date.strftime("%Y-%m-%d %H:%M:%S") if edit_date else None,
+        "edit_date": to_shamsi(edit_date),
         "redFlag": False,
         "mantegh": [],
     }
+
 
 
 async def initial_data_load():
@@ -160,27 +166,29 @@ async def initial_data_load():
 
 @client.on(events.NewMessage)
 async def new_message_handler(event):
-    """ ذخیره پیام جدید و افزایش unread_count به همراه آپدیت آخرین پیام """
     msg = event.message
     chat = await event.get_chat()
     chat_id = chat.id
     chat_name = getattr(chat, "title", getattr(chat, "first_name", "Private Chat"))
 
-    # ذخیره پیام جدید در دیتابیس
+    def to_shamsi(dt):
+        if dt:
+            return jdatetime.datetime.fromgregorian(datetime=dt).strftime("%Y-%m-%d %H:%M:%S")
+        return None
+
     messages_collection.insert_one(build_message_object(msg, chat_id, chat_name))
 
     update_data = {
         "$set": {
             "last_message_text": msg.text if msg.text else "",
-            "last_message_date": msg.date.astimezone(tehran_tz).strftime("%Y-%m-%d %H:%M:%S") if msg.date else None
+            "last_message_date": to_shamsi(msg.date)
         }
     }
 
-    # اگر پیام outgoing باشد unread_count را 0 کن، وگرنه 1 اضافه کن
     if msg.out:
-        update_data["$set"]["unread_count"] = 0  # چون خودمان پیام را ارسال کردیم
+        update_data["$set"]["unread_count"] = 0
     else:
-        update_data["$inc"] = {"unread_count": 1}  # پیام از طرف دیگر دریافت شده
+        update_data["$inc"] = {"unread_count": 1}
 
     chats_collection.update_one({"chat_id": chat_id}, update_data, upsert=True)
     print(f"🔵 New message in {chat_name} saved. (Outgoing: {msg.out})")
