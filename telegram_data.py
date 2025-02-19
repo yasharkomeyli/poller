@@ -2,7 +2,6 @@ import os
 import datetime
 import asyncio
 import pytz
-
 from telethon import TelegramClient, events
 from pymongo import MongoClient
 
@@ -10,9 +9,9 @@ from pymongo import MongoClient
 os.makedirs("profile_photos", exist_ok=True)
 
 # اتصال به MongoDB
-# mongo_client = MongoClient("mongodb://localhost:27017/")
+mongo_client = MongoClient("mongodb://localhost:27017/")
 
-mongo_client = MongoClient("mongodb://admin:Momgodbpass0200Yashar@mongo:27017/telegram_data?authSource=admin")
+# mongo_client = MongoClient("mongodb://admin:Momgodbpass0200Yashar@mongo:27017/telegram_data?authSource=admin")
 db = mongo_client["telegram_data"]
 messages_collection = db["messages"]
 chats_collection = db["chats"]
@@ -176,12 +175,15 @@ async def new_message_handler(event):
             "last_message_date": msg.date.astimezone(tehran_tz).strftime("%Y-%m-%d %H:%M:%S") if msg.date else None
         }
     }
-    # افزایش unread_count فقط برای پیام‌های دریافتی
-    if not msg.out:
-        update_data["$inc"] = {"unread_count": 1}
+
+    # اگر پیام outgoing باشد unread_count را 0 کن، وگرنه 1 اضافه کن
+    if msg.out:
+        update_data["$set"]["unread_count"] = 0  # چون خودمان پیام را ارسال کردیم
+    else:
+        update_data["$inc"] = {"unread_count": 1}  # پیام از طرف دیگر دریافت شده
 
     chats_collection.update_one({"chat_id": chat_id}, update_data, upsert=True)
-    print(f"🔵 New message in {chat_name} saved.")
+    print(f"🔵 New message in {chat_name} saved. (Outgoing: {msg.out})")
 
 
 @client.on(events.MessageEdited)
