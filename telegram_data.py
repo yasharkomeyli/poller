@@ -30,6 +30,20 @@ client = TelegramClient('session_name', API_ID, API_HASH)
 tehran_tz = pytz.timezone("Asia/Tehran")
 
 
+def to_shamsi(dt):
+    """
+    تبدیل یک شی datetime به زمان منطقه تهران (naive) و سپس تبدیل به فرمت شمسی.
+    """
+    if dt:
+        # ابتدا به زمان تهران تبدیل می‌شود
+        dt_tehran = dt.astimezone(tehran_tz)
+        # حذف tzinfo (ایجاد یک datetime naive)
+        naive_dt = dt_tehran.replace(tzinfo=None)
+        # تبدیل به تاریخ شمسی
+        return jdatetime.datetime.fromgregorian(datetime=naive_dt).strftime("%Y-%m-%d %H:%M:%S")
+    return None
+
+
 async def update_chat_details(chat):
     """
     اطلاعات کاربر (مانند username و عکس پروفایل) را دریافت و در دیتابیس ذخیره می‌کند.
@@ -53,7 +67,13 @@ async def update_chat_details(chat):
     chats_collection.update_one({"chat_id": chat_id}, {"$set": chat_update_data}, upsert=True)
 
 
+
+
 def save_messages(chat_name, chat_id, messages):
+    """
+    ذخیره پیام‌های دریافت شده و آپدیت اطلاعات چت (مانند آخرین پیام و تاریخش).
+    فقط پیام‌های دریافتی (incoming) پردازش می‌شوند.
+    """
     incoming_messages = [msg for msg in messages if not msg.out]
     if not incoming_messages:
         return
@@ -64,13 +84,8 @@ def save_messages(chat_name, chat_id, messages):
             if last_msg is None or msg.date > last_msg.date:
                 last_msg = msg
 
-    def to_shamsi(dt):
-        if dt:
-            return jdatetime.datetime.fromgregorian(datetime=dt).strftime("%Y-%m-%d %H:%M:%S")
-        return None
-
-    # تبدیل تاریخ آخرین پیام به زمان تهران قبل از تبدیل به شمسی
-    last_message_date = to_shamsi(last_msg.date.astimezone(tehran_tz)) if last_msg and last_msg.date else None
+    # تبدیل تاریخ آخرین پیام به زمان تهران و سپس به شمسی
+    last_message_date = to_shamsi(last_msg.date) if last_msg and last_msg.date else None
     last_message_text = last_msg.text if last_msg and last_msg.text else ""
 
     chat_data = {
@@ -79,7 +94,6 @@ def save_messages(chat_name, chat_id, messages):
         "last_message_date": last_message_date,
         "last_message_text": last_message_text
     }
-
     try:
         chats_collection.update_one({"chat_id": chat_id}, {"$set": chat_data}, upsert=True)
         print(f"Updated chat: {chat_name} - Last message at: {last_message_date}")
@@ -89,7 +103,6 @@ def save_messages(chat_name, chat_id, messages):
     for msg in incoming_messages:
         if msg.text:
             update_message_data(msg, chat_id, chat_name)
-
 
 
 def update_message_data(msg, chat_id, chat_name):
@@ -106,13 +119,12 @@ def update_message_data(msg, chat_id, chat_name):
 
 
 def handle_edited_message(existing, msg):
-    text_list = existing["text"]
+    text_list = existing.get("text", [])
     if isinstance(text_list, str):
         text_list = [text_list]
     if msg.text not in text_list:
         text_list.append(msg.text)
-        # تبدیل edit_date به زمان تهران و سپس به شمسی
-        edit_date_shamsi = msg.edit_date.astimezone(tehran_tz).strftime("%Y-%m-%d %H:%M:%S") if msg.edit_date else None
+        edit_date_shamsi = to_shamsi(msg.edit_date) if msg.edit_date else None
         messages_collection.update_one(
             {"_id": existing["_id"]},
             {"$set": {
@@ -124,32 +136,26 @@ def handle_edited_message(existing, msg):
 
 
 def build_message_object(msg, chat_id, chat_name):
-    msg_date = msg.date.astimezone(tehran_tz) if msg.date else None
-    edit_date = msg.edit_date.astimezone(tehran_tz) if msg.edit_date else None
-
-    def to_shamsi(dt):
-        if dt:
-            shamsi_date = jdatetime.datetime.fromgregorian(datetime=dt)
-            return shamsi_date.strftime("%Y-%m-%d %H:%M:%S")
-        return None
-
+    """
+    ساخت آبجکت پیام برای ذخیره در دیتابیس.
+    تاریخ پیام و تاریخ ویرایش به صورت شمسی و زمان تهران ذخیره می‌شوند.
+    """
     return {
         "chat_id": chat_id,
         "chat_name": chat_name,
         "message_id": msg.id,
         "sender_id": msg.sender_id,
-        "username": [],
+        "username": [],  # در صورت نیاز می‌توانید اطلاعات بیشتری اضافه کنید
         "sender_username": getattr(msg.sender, 'username', None),
         "is_outgoing": msg.out,
         "text": [msg.text],
-        "date": to_shamsi(msg_date),
+        "date": to_shamsi(msg.date) if msg.date else None,
         "reply_to_msg_id": msg.reply_to_msg_id,
         "is_edited": bool(msg.edit_date),
-        "edit_date": to_shamsi(edit_date),
+        "edit_date": to_shamsi(msg.edit_date) if msg.edit_date else None,
         "redFlag": False,
         "mantegh": [],
     }
-
 
 
 async def initial_data_load():
@@ -173,35 +179,28 @@ async def initial_data_load():
 
 @client.on(events.NewMessage)
 async def new_message_handler(event):
+    """ ذخیره پیام جدید و افزایش unread_count به همراه آپدیت آخرین پیام """
     msg = event.message
     if msg.out:
-        return
+        return  # فقط پیام‌های دریافتی پردازش شوند
 
     chat = await event.get_chat()
     chat_id = chat.id
     chat_name = getattr(chat, "title", getattr(chat, "first_name", "Private Chat"))
 
+    # ذخیره پیام جدید در دیتابیس
     messages_collection.insert_one(build_message_object(msg, chat_id, chat_name))
 
-    def to_shamsi(dt):
-        if dt:
-            return jdatetime.datetime.fromgregorian(datetime=dt).strftime("%Y-%m-%d %H:%M:%S")
-        return None
-
-    # ابتدا تاریخ پیام را به زمان تهران تبدیل کنید
-    dt = msg.date.astimezone(tehran_tz) if msg.date else None
     update_data = {
         "$set": {
             "last_message_text": msg.text if msg.text else "",
-            "last_message_date": to_shamsi(dt)
+            "last_message_date": to_shamsi(msg.date.astimezone(tehran_tz)) if msg.date else None
         },
         "$inc": {"unread_count": 1}
     }
+
     chats_collection.update_one({"chat_id": chat_id}, update_data, upsert=True)
     print(f"🔵 New incoming message in {chat_name} saved.")
-
-
-
 
 
 @client.on(events.MessageEdited)
@@ -219,7 +218,6 @@ async def message_edited_handler(event):
 
     if chat:
         await update_chat_details(chat)
-
     update_message_data(msg, chat_id, chat_name)
 
 
@@ -236,7 +234,7 @@ async def message_deleted_handler(event):
 @client.on(events.MessageRead)
 async def message_read_handler(event):
     """
-    زمانی که کاربر پیام‌های یک چت را می‌خواند (مثلاً با باز کردن چت)،
+    زمانی که کاربر پیام‌های یک چت را می‌خواند (مثلاً با باز کردن چت در تلگرام)،
     تعداد unread_count آن چت به 0 تنظیم می‌شود.
     """
     chat_id = getattr(event, 'chat_id', None)
