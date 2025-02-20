@@ -54,8 +54,15 @@ async def update_chat_details(chat):
 
 
 def save_messages(chat_name, chat_id, messages):
+    # فیلتر کردن پیام‌ها: فقط پیام‌های دریافتی (incoming) را پردازش می‌کنیم
+    incoming_messages = [msg for msg in messages if not msg.out]
+
+    # اگر هیچ پیام دریافتی‌ای نباشد، نیازی به آپدیت فیلدهای چت نیست
+    if not incoming_messages:
+        return
+
     last_msg = None
-    for msg in messages:
+    for msg in incoming_messages:
         if msg.date:
             if last_msg is None or msg.date > last_msg.date:
                 last_msg = msg
@@ -82,9 +89,11 @@ def save_messages(chat_name, chat_id, messages):
     except Exception as e:
         print(f"Chat update error: {e}")
 
-    for msg in messages:
+    # ذخیره پیام‌های دریافتی در دیتابیس
+    for msg in incoming_messages:
         if msg.text:
             update_message_data(msg, chat_id, chat_name)
+
 
 
 def update_message_data(msg, chat_id, chat_name):
@@ -106,12 +115,14 @@ def handle_edited_message(existing, msg):
         text_list = [text_list]
     if msg.text not in text_list:
         text_list.append(msg.text)
+        # تبدیل edit_date به زمان تهران و سپس به شمسی
+        edit_date_shamsi = msg.edit_date.astimezone(tehran_tz).strftime("%Y-%m-%d %H:%M:%S") if msg.edit_date else None
         messages_collection.update_one(
             {"_id": existing["_id"]},
             {"$set": {
                 "text": text_list,
                 "is_edited": True,
-                "edit_date": msg.edit_date.strftime("%Y-%m-%d %H:%M:%S")
+                "edit_date": edit_date_shamsi
             }}
         )
 
@@ -167,7 +178,7 @@ async def initial_data_load():
 @client.on(events.NewMessage)
 async def new_message_handler(event):
     msg = event.message
-    # اگر پیام از طرف خودمان (outgoing) است، آن را نادیده بگیریم
+    # اگر پیام از طرف خودمان (outgoing) است، آپدیت فیلدهای چت را ندهیم
     if msg.out:
         return
 
@@ -178,7 +189,7 @@ async def new_message_handler(event):
     # ذخیره پیام دریافتی در دیتابیس
     messages_collection.insert_one(build_message_object(msg, chat_id, chat_name))
 
-    # به‌روز رسانی اطلاعات چت (فقط برای پیام‌های دریافتی)
+    # تبدیل تاریخ به شمسی (با توجه به زمان تهران)
     def to_shamsi(dt):
         if dt:
             return jdatetime.datetime.fromgregorian(datetime=dt).strftime("%Y-%m-%d %H:%M:%S")
