@@ -167,31 +167,34 @@ async def initial_data_load():
 @client.on(events.NewMessage)
 async def new_message_handler(event):
     msg = event.message
+    # اگر پیام از طرف خودمان (outgoing) است، آن را نادیده بگیریم
+    if msg.out:
+        return
+
     chat = await event.get_chat()
     chat_id = chat.id
     chat_name = getattr(chat, "title", getattr(chat, "first_name", "Private Chat"))
 
+    # ذخیره پیام دریافتی در دیتابیس
+    messages_collection.insert_one(build_message_object(msg, chat_id, chat_name))
+
+    # به‌روز رسانی اطلاعات چت (فقط برای پیام‌های دریافتی)
     def to_shamsi(dt):
         if dt:
             return jdatetime.datetime.fromgregorian(datetime=dt).strftime("%Y-%m-%d %H:%M:%S")
         return None
 
-    messages_collection.insert_one(build_message_object(msg, chat_id, chat_name))
-
     update_data = {
         "$set": {
             "last_message_text": msg.text if msg.text else "",
             "last_message_date": to_shamsi(msg.date)
-        }
+        },
+        "$inc": {"unread_count": 1}
     }
-
-    if msg.out:
-        update_data["$set"]["unread_count"] = 0
-    else:
-        update_data["$inc"] = {"unread_count": 1}
-
     chats_collection.update_one({"chat_id": chat_id}, update_data, upsert=True)
-    print(f"🔵 New message in {chat_name} saved. (Outgoing: {msg.out})")
+    print(f"🔵 New incoming message in {chat_name} saved.")
+
+
 
 
 @client.on(events.MessageEdited)
