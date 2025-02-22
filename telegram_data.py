@@ -5,9 +5,10 @@ import pytz
 from telethon import TelegramClient, events
 from pymongo import MongoClient
 import jdatetime
+import os
 
-# ایجاد دایرکتوری برای ذخیره عکس‌های پروفایل (در صورت عدم وجود)
-os.makedirs("profile_photos", exist_ok=True)
+# گرفتن مسیر یک سطح بالاتر از دایرکتوری فعلی (فرض بر این است که این فایل در telegram-box/poller قرار دارد)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # اتصال به MongoDB
 # mongo_client = MongoClient("mongodb://localhost:27017/")
@@ -35,34 +36,48 @@ def to_shamsi(dt):
     تبدیل یک شی datetime به زمان منطقه تهران (naive) و سپس تبدیل به فرمت شمسی.
     """
     if dt:
-        # ابتدا به زمان تهران تبدیل می‌شود
         dt_tehran = dt.astimezone(tehran_tz)
-        # حذف tzinfo (ایجاد یک datetime naive)
         naive_dt = dt_tehran.replace(tzinfo=None)
-        # تبدیل به تاریخ شمسی
         return jdatetime.datetime.fromgregorian(datetime=naive_dt).strftime("%Y-%m-%d %H:%M:%S")
     return None
 
 
+
 async def update_chat_details(chat):
     """
-    اطلاعات کاربر (مانند username و عکس پروفایل) را دریافت و در دیتابیس ذخیره می‌کند.
+    دریافت اطلاعات کاربر (مانند username و عکس پروفایل)؛ دانلود فیزیکی عکس در دایرکتوری
+    profile_photos (در telegram-box/profile_photos) و ذخیره نام فایل (به جای لینک) در MongoDB.
+    اگر کاربر عکس پروفایل دارد، در هر فراخوانی عکس جدید جایگزین عکس قبلی می‌شود.
     """
     chat_id = chat.id if hasattr(chat, 'id') else None
     if not chat_id:
         return
 
     chat_username = getattr(chat, 'username', None)
-    profile_photo_path = None
+    photos_dir = os.path.join(BASE_DIR, "profile_photos")
+    os.makedirs(photos_dir, exist_ok=True)  # اطمینان از ایجاد دایرکتوری در صورت عدم وجود
+    file_path = os.path.join(photos_dir, f"{chat_id}.jpg")
+    profile_photo_file = None  # مقدار پیش‌فرض
+
     if hasattr(chat, 'photo') and chat.photo:
         try:
-            profile_photo_path = await client.download_profile_photo(chat, file=f"profile_photos/{chat_id}.jpg")
+            profile_photo_file = f"{chat_id}.jpg"
+            # اگر فایل قبلاً وجود داشت (عکس قبلی)، آن را حذف کن
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            # دانلود عکس جدید و ذخیره در فایل
+            await client.download_profile_photo(chat, file=file_path)
         except Exception as e:
             print(f"Error downloading profile photo for chat {chat_id}: {e}")
+    else:
+        # اگر کاربر عکس پروفایل ندارد، در صورت وجود فایل آن را حذف کن
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        profile_photo_file = None
 
     chat_update_data = {
         "username": chat_username,
-        "profile_photo": profile_photo_path
+        "profile_photo": profile_photo_file  # اگر عکس وجود نداشته باشد مقدار None ذخیره می‌شود
     }
     chats_collection.update_one({"chat_id": chat_id}, {"$set": chat_update_data}, upsert=True)
 
@@ -84,7 +99,6 @@ def save_messages(chat_name, chat_id, messages):
             if last_msg is None or msg.date > last_msg.date:
                 last_msg = msg
 
-    # تبدیل تاریخ آخرین پیام به زمان تهران و سپس به شمسی
     last_message_date = to_shamsi(last_msg.date) if last_msg and last_msg.date else None
     last_message_text = last_msg.text if last_msg and last_msg.text else ""
 
@@ -168,9 +182,8 @@ async def initial_data_load():
         chat_id = chat.id
         chat_name = getattr(chat, "title", getattr(chat, "first_name", "Private Chat"))
 
-        # ذخیره اطلاعات پروفایل و سایر جزئیات چت
+        # ذخیره اطلاعات پروفایل و سایر جزئیات چت به صورت لینک
         await update_chat_details(chat)
-        # دریافت پیام‌های این چت (limit قابل تغییر است)
         messages = await client.get_messages(chat_id, limit=100)
         if messages:
             save_messages(chat_name, chat_id, messages)
@@ -182,13 +195,12 @@ async def new_message_handler(event):
     """ ذخیره پیام جدید و افزایش unread_count به همراه آپدیت آخرین پیام """
     msg = event.message
     if msg.out:
-        return  # فقط پیام‌های دریافتی پردازش شوند
+        return
 
     chat = await event.get_chat()
     chat_id = chat.id
     chat_name = getattr(chat, "title", getattr(chat, "first_name", "Private Chat"))
 
-    # ذخیره پیام جدید در دیتابیس
     messages_collection.insert_one(build_message_object(msg, chat_id, chat_name))
 
     update_data = {
