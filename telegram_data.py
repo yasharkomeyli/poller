@@ -8,7 +8,7 @@ import jdatetime
 import os
 
 # گرفتن مسیر یک سطح بالاتر از دایرکتوری فعلی (فرض بر این است که این فایل در telegram-box/poller قرار دارد)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 # اتصال به MongoDB
 # mongo_client = MongoClient("mongodb://localhost:27017/")
@@ -54,8 +54,9 @@ async def update_chat_details(chat):
         return
 
     chat_username = getattr(chat, 'username', None)
+    # تعیین مسیر پایه به صورت یک سطح بالاتر از poller
     photos_dir = os.path.join(BASE_DIR, "profile_photos")
-    os.makedirs(photos_dir, exist_ok=True)  # اطمینان از ایجاد دایرکتوری در صورت عدم وجود
+    os.makedirs(photos_dir, exist_ok=True)  # ایجاد دایرکتوری در صورت عدم وجود
     file_path = os.path.join(photos_dir, f"{chat_id}.jpg")
     profile_photo_file = None  # مقدار پیش‌فرض
 
@@ -80,6 +81,7 @@ async def update_chat_details(chat):
         "profile_photo": profile_photo_file  # اگر عکس وجود نداشته باشد مقدار None ذخیره می‌شود
     }
     chats_collection.update_one({"chat_id": chat_id}, {"$set": chat_update_data}, upsert=True)
+
 
 
 
