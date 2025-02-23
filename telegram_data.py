@@ -9,7 +9,7 @@ import jdatetime
 import os
 
 # گرفتن مسیر یک سطح بالاتر از دایرکتوری فعلی (فرض بر این است که این فایل در telegram-box/poller قرار دارد)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # اتصال به MongoDB
 # mongo_client = MongoClient("mongodb://localhost:27017/")
@@ -46,9 +46,8 @@ def to_shamsi(dt):
 
 async def update_chat_details(chat):
     """
-    دریافت اطلاعات کاربر (مانند username و عکس پروفایل)؛ دانلود فیزیکی عکس در دایرکتوری
-    profile_photos (در telegram-box/profile_photos) و ذخیره نام فایل (به جای لینک) در MongoDB.
-    اگر کاربر عکس پروفایل دارد، در هر فراخوانی عکس جدید جایگزین عکس قبلی می‌شود.
+    دریافت اطلاعات کاربر و دانلود عکس پروفایل در دایرکتوری
+    profile_photos (در همان دایرکتوری فایل کد) و ذخیره نام فایل در MongoDB.
     """
     chat_id = chat.id if hasattr(chat, 'id') else None
     if not chat_id:
@@ -56,32 +55,29 @@ async def update_chat_details(chat):
 
     chat_username = getattr(chat, 'username', None)
     photos_dir = os.path.join(BASE_DIR, "profile_photos")
-    os.makedirs(photos_dir, exist_ok=True)  # اطمینان از ایجاد دایرکتوری در صورت عدم وجود
+    os.makedirs(photos_dir, exist_ok=True)  # ایجاد دایرکتوری در صورت عدم وجود
     file_path = os.path.join(photos_dir, f"{chat_id}.jpg")
-    profile_photo_file = None  # مقدار پیش‌فرض
+    profile_photo_file = None
 
     if hasattr(chat, 'photo') and chat.photo:
         try:
             profile_photo_file = f"{chat_id}.jpg"
-            # اگر فایل قبلاً وجود داشت (عکس قبلی)، آن را حذف کن
+            # اگر فایل قبلاً وجود داشت، حذف شود
             if os.path.exists(file_path):
                 os.remove(file_path)
-            # دانلود عکس جدید و ذخیره در فایل
             await client.download_profile_photo(chat, file=file_path)
         except Exception as e:
             print(f"Error downloading profile photo for chat {chat_id}: {e}")
     else:
-        # اگر کاربر عکس پروفایل ندارد، در صورت وجود فایل آن را حذف کن
         if os.path.exists(file_path):
             os.remove(file_path)
         profile_photo_file = None
 
     chat_update_data = {
         "username": chat_username,
-        "profile_photo": profile_photo_file  # اگر عکس وجود نداشته باشد مقدار None ذخیره می‌شود
+        "profile_photo": profile_photo_file
     }
     chats_collection.update_one({"chat_id": chat_id}, {"$set": chat_update_data}, upsert=True)
-
 
 
 
