@@ -1,4 +1,3 @@
-
 import os
 import datetime
 import asyncio
@@ -6,14 +5,10 @@ import pytz
 from telethon import TelegramClient, events
 from pymongo import MongoClient
 import jdatetime
-import os
 
 # گرفتن مسیر یک سطح بالاتر از دایرکتوری فعلی (فرض بر این است که این فایل در telegram-box/poller قرار دارد)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 # اتصال به MongoDB
-# mongo_client = MongoClient("mongodb://localhost:27017/")
-
 mongo_client = MongoClient("mongodb://admin:Momgodbpass0200Yashar@mongo:27017/telegram_data?authSource=admin")
 db = mongo_client["telegram_data"]
 messages_collection = db["messages"]
@@ -41,7 +36,6 @@ def to_shamsi(dt):
         naive_dt = dt_tehran.replace(tzinfo=None)
         return jdatetime.datetime.fromgregorian(datetime=naive_dt).strftime("%Y-%m-%d %H:%M:%S")
     return None
-
 
 
 async def update_chat_details(chat):
@@ -80,25 +74,21 @@ async def update_chat_details(chat):
     chats_collection.update_one({"chat_id": chat_id}, {"$set": chat_update_data}, upsert=True)
 
 
-
-def save_messages(chat_name, chat_id, messages):
+async def save_messages(chat_name, chat_id, messages):
     """
-    ذخیره پیام‌های دریافت شده و آپدیت اطلاعات چت (مانند آخرین پیام و تاریخش).
-    فقط پیام‌های دریافتی (incoming) پردازش می‌شوند.
+    ذخیره تمام پیام‌های دریافت شده (هم incoming و هم outgoing) و آپدیت اطلاعات چت (مانند آخرین پیام و تاریخ آن).
     """
-    incoming_messages = [msg for msg in messages if not msg.out]
-    if not incoming_messages:
+    if not messages:
         return
 
     last_msg = None
-    for msg in incoming_messages:
+    for msg in messages:
         if msg.date:
             if last_msg is None or msg.date > last_msg.date:
                 last_msg = msg
 
     last_message_date = to_shamsi(last_msg.date) if last_msg and last_msg.date else None
     last_message_text = last_msg.text if last_msg and last_msg.text else ""
-
     chat_data = {
         "chat_id": chat_id,
         "chat_name": chat_name,
@@ -111,25 +101,32 @@ def save_messages(chat_name, chat_id, messages):
     except Exception as e:
         print(f"Chat update error: {e}")
 
-    for msg in incoming_messages:
-        if msg.text:
-            update_message_data(msg, chat_id, chat_name)
+    # پردازش همه پیام‌ها بدون توجه به جهت (incoming/outgoing)
+    for msg in messages:
+        await update_message_data(msg, chat_id, chat_name)
 
 
-def update_message_data(msg, chat_id, chat_name):
+async def update_message_data(msg, chat_id, chat_name):
+    """
+    بررسی و ذخیره یا به‌روزرسانی پیام در دیتابیس.
+    در صورت ویرایش پیام، تنها آپدیت انجام می‌شود.
+    """
     existing = messages_collection.find_one({"message_id": msg.id})
     if existing:
         if msg.edit_date:
             handle_edited_message(existing, msg)
         return
     try:
-        message_data = build_message_object(msg, chat_id, chat_name)
+        message_data = await build_message_object(msg, chat_id, chat_name)
         messages_collection.insert_one(message_data)
     except Exception as e:
         print("Error inserting message:", e)
 
 
 def handle_edited_message(existing, msg):
+    """
+    در صورت ویرایش پیام، فیلد text آپدیت می‌شود.
+    """
     text_list = existing.get("text", [])
     if isinstance(text_list, str):
         text_list = [text_list]
@@ -146,11 +143,22 @@ def handle_edited_message(existing, msg):
         )
 
 
-def build_message_object(msg, chat_id, chat_name):
+async def build_message_object(msg, chat_id, chat_name):
     """
     ساخت آبجکت پیام برای ذخیره در دیتابیس.
     تاریخ پیام و تاریخ ویرایش به صورت شمسی و زمان تهران ذخیره می‌شوند.
+    در صورتی که پیام شامل عکس باشد، داده باینری عکس دانلود شده و به جای متن در فیلد text ذخیره می‌شود.
     """
+    if msg.photo:
+        try:
+            # دانلود داده باینری عکس به صورت async
+            photo_data = await client.download_media(msg.photo, file=bytes)
+            text_field = photo_data
+        except Exception as e:
+            print("Error downloading photo for message", msg.id, ":", e)
+            text_field = [msg.text] if msg.text else []
+    else:
+        text_field = [msg.text] if msg.text else []
     return {
         "chat_id": chat_id,
         "chat_name": chat_name,
@@ -159,7 +167,7 @@ def build_message_object(msg, chat_id, chat_name):
         "username": [],  # در صورت نیاز می‌توانید اطلاعات بیشتری اضافه کنید
         "sender_username": getattr(msg.sender, 'username', None),
         "is_outgoing": msg.out,
-        "text": [msg.text],
+        "text": text_field,  # اگر پیام شامل عکس باشد، داده باینری عکس در اینجا ذخیره می‌شود.
         "date": to_shamsi(msg.date) if msg.date else None,
         "reply_to_msg_id": msg.reply_to_msg_id,
         "is_edited": bool(msg.edit_date),
@@ -178,38 +186,39 @@ async def initial_data_load():
         chat = dialog.entity
         chat_id = chat.id
         chat_name = getattr(chat, "title", getattr(chat, "first_name", "Private Chat"))
-
         # ذخیره اطلاعات پروفایل و سایر جزئیات چت به صورت لینک
         await update_chat_details(chat)
         messages = await client.get_messages(chat_id, limit=100)
         if messages:
-            save_messages(chat_name, chat_id, messages)
+            await save_messages(chat_name, chat_id, messages)
     print("Initial data load completed.")
 
 
 @client.on(events.NewMessage)
 async def new_message_handler(event):
-    """ ذخیره پیام جدید و افزایش unread_count به همراه آپدیت آخرین پیام """
+    """
+    ذخیره پیام جدید و افزایش unread_count (فقط برای پیام‌های دریافتی)
+    به همراه آپدیت آخرین پیام.
+    اکنون پیام‌های ارسال شده (outgoing) نیز ذخیره می‌شوند.
+    """
     msg = event.message
-    if msg.out:
-        return
-
     chat = await event.get_chat()
     chat_id = chat.id
     chat_name = getattr(chat, "title", getattr(chat, "first_name", "Private Chat"))
+    message_data = await build_message_object(msg, chat_id, chat_name)
+    messages_collection.insert_one(message_data)
 
-    messages_collection.insert_one(build_message_object(msg, chat_id, chat_name))
-
-    update_data = {
-        "$set": {
-            "last_message_text": msg.text if msg.text else "",
-            "last_message_date": to_shamsi(msg.date.astimezone(tehran_tz)) if msg.date else None
-        },
-        "$inc": {"unread_count": 1}
+    update_fields = {
+        "last_message_text": msg.text if msg.text else "",
+        "last_message_date": to_shamsi(msg.date.astimezone(tehran_tz)) if msg.date else None
     }
-
+    # افزایش unread_count فقط برای پیام‌های دریافتی (incoming)
+    if not msg.out:
+        update_data = {"$set": update_fields, "$inc": {"unread_count": 1}}
+    else:
+        update_data = {"$set": update_fields}
     chats_collection.update_one({"chat_id": chat_id}, update_data, upsert=True)
-    print(f"🔵 New incoming message in {chat_name} saved.")
+    print(f"🔵 New message in {chat_name} saved.")
 
 
 @client.on(events.MessageEdited)
@@ -227,7 +236,7 @@ async def message_edited_handler(event):
 
     if chat:
         await update_chat_details(chat)
-    update_message_data(msg, chat_id, chat_name)
+    await update_message_data(msg, chat_id, chat_name)
 
 
 @client.on(events.MessageDeleted)
