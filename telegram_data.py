@@ -9,6 +9,8 @@ import jdatetime
 # گرفتن مسیر یک سطح بالاتر از دایرکتوری فعلی (فرض بر این است که این فایل در telegram-box/poller قرار دارد)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # اتصال به MongoDB
+
+
 mongo_client = MongoClient("mongodb://admin:Momgodbpass0200Yashar@mongo:27017/telegram_data?authSource=admin")
 db = mongo_client["telegram_data"]
 messages_collection = db["messages"]
@@ -147,18 +149,50 @@ async def build_message_object(msg, chat_id, chat_name):
     """
     ساخت آبجکت پیام برای ذخیره در دیتابیس.
     تاریخ پیام و تاریخ ویرایش به صورت شمسی و زمان تهران ذخیره می‌شوند.
-    در صورتی که پیام شامل عکس باشد، داده باینری عکس دانلود شده و به جای متن در فیلد text ذخیره می‌شود.
+    تغییر جدید:
+    - اگر پیام شامل ویس باشد (msg.voice)، داده باینری ویس دانلود شده و در فیلد text ذخیره شده و
+      فیلد 'type' برابر "voice" تنظیم می‌شود.
+    - اگر پیام شامل عکس باشد (msg.photo)، داده باینری عکس دانلود شده و در فیلد text ذخیره شده و
+      فیلد 'type' برابر "image" تنظیم می‌شود.
+    - اگر پیام شامل فایل (document) باشد (msg.document)، داده باینری فایل دانلود شده و در فیلد text ذخیره شده و
+      فیلد 'type' برابر "file" تنظیم می‌شود.
+    - در غیر این صورت، پیام متنی است؛ در این صورت فیلد text شامل متن پیام (در قالب لیست) ذخیره شده و
+      فیلد 'type' برابر "text" تنظیم می‌شود.
     """
-    if msg.photo:
+    if hasattr(msg, 'voice') and msg.voice:
         try:
-            # دانلود داده باینری عکس به صورت async
+            # دانلود داده باینری ویس
+            voice_data = await client.download_media(msg.voice, file=bytes)
+            text_field = voice_data
+            message_type = "voice"
+        except Exception as e:
+            print("Error downloading voice for message", msg.id, ":", e)
+            text_field = [msg.text] if msg.text else []
+            message_type = "text"
+    elif msg.photo:
+        try:
+            # دانلود داده باینری عکس
             photo_data = await client.download_media(msg.photo, file=bytes)
             text_field = photo_data
+            message_type = "image"
         except Exception as e:
             print("Error downloading photo for message", msg.id, ":", e)
             text_field = [msg.text] if msg.text else []
+            message_type = "text"
+    elif hasattr(msg, 'document') and msg.document:
+        try:
+            # دانلود داده باینری فایل
+            file_data = await client.download_media(msg.document, file=bytes)
+            text_field = file_data
+            message_type = "file"
+        except Exception as e:
+            print("Error downloading file for message", msg.id, ":", e)
+            text_field = [msg.text] if msg.text else []
+            message_type = "text"
     else:
         text_field = [msg.text] if msg.text else []
+        message_type = "text"
+
     return {
         "chat_id": chat_id,
         "chat_name": chat_name,
@@ -167,7 +201,8 @@ async def build_message_object(msg, chat_id, chat_name):
         "username": [],  # در صورت نیاز می‌توانید اطلاعات بیشتری اضافه کنید
         "sender_username": getattr(msg.sender, 'username', None),
         "is_outgoing": msg.out,
-        "text": text_field,  # اگر پیام شامل عکس باشد، داده باینری عکس در اینجا ذخیره می‌شود.
+        "type": message_type,  # تنظیم نوع پیام: "text"، "image"، "voice" یا "file"
+        "text": text_field,    # داده متنی یا باینری عکس/ویس/فایل
         "date": to_shamsi(msg.date) if msg.date else None,
         "reply_to_msg_id": msg.reply_to_msg_id,
         "is_edited": bool(msg.edit_date),
@@ -175,6 +210,7 @@ async def build_message_object(msg, chat_id, chat_name):
         "redFlag": False,
         "mantegh": [],
     }
+
 
 
 async def initial_data_load():
