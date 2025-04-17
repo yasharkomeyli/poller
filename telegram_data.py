@@ -5,12 +5,14 @@ import pytz
 from telethon import TelegramClient, events
 from pymongo import MongoClient
 import jdatetime
+from django.conf import settings
+
 
 # گرفتن مسیر یک سطح بالاتر از دایرکتوری فعلی (فرض بر این است که این فایل در telegram-box/poller قرار دارد)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # اتصال به MongoDB
 
-
+# mongo_client = MongoClient("mongodb://localhost:27017/")
 mongo_client = MongoClient("mongodb://admin:Momgodbpass0200Yashar@mongo:27017/telegram_data?authSource=admin")
 db = mongo_client["telegram_data"]
 messages_collection = db["messages"]
@@ -145,6 +147,9 @@ def handle_edited_message(existing, msg):
         )
 
 
+
+
+
 async def build_message_object(msg, chat_id, chat_name):
     """
     ساخت آبجکت پیام برای ذخیره در دیتابیس.
@@ -152,16 +157,18 @@ async def build_message_object(msg, chat_id, chat_name):
     تغییر جدید:
     - اگر پیام شامل ویس باشد (msg.voice)، داده باینری ویس دانلود شده و در فیلد text ذخیره شده و
       فیلد 'type' برابر "voice" تنظیم می‌شود.
-    - اگر پیام شامل عکس باشد (msg.photo)، داده باینری عکس دانلود شده و در فیلد text ذخیره شده و
-      فیلد 'type' برابر "image" تنظیم می‌شود.
-    - اگر پیام شامل فایل (document) باشد (msg.document)، داده باینری فایل دانلود شده و در فیلد text ذخیره شده و
+    - اگر پیام شامل موزیک باشد (msg.audio)، داده باینری موزیک دانلود شده به همراه نام فایل استخراج‌شده در قالب یک لیست در فیلد text ذخیره شده و
+      فیلد 'type' برابر "music" تنظیم می‌شود.
+    - اگر پیام شامل ویدئو باشد (msg.video)، داده باینری ویدئو دانلود شده در دایرکتوری telegrambox/static/video ذخیره می‌شود و
+      فیلد text به صورت یک لیست شامل [نام فایل, مسیر نسبی فایل] ذخیره شده و
+      فیلد 'type' برابر "video" تنظیم می‌شود.
+    - اگر پیام شامل عکس باشد (msg.photo)، داده باینری عکس دانلود شده و در فیلد text ذخیره شده و فیلد 'type' برابر "image" تنظیم می‌شود.
+    - اگر پیام شامل فایل (document) باشد (msg.document)، داده باینری فایل دانلود شده به همراه نام فایل در قالب یک لیست در فیلد text ذخیره شده و
       فیلد 'type' برابر "file" تنظیم می‌شود.
-    - در غیر این صورت، پیام متنی است؛ در این صورت فیلد text شامل متن پیام (در قالب لیست) ذخیره شده و
-      فیلد 'type' برابر "text" تنظیم می‌شود.
+    - در غیر این صورت، پیام متنی است؛ در این صورت فیلد text شامل متن پیام (در قالب لیست) ذخیره می‌شود و فیلد 'type' برابر "text" تنظیم می‌شود.
     """
     if hasattr(msg, 'voice') and msg.voice:
         try:
-            # دانلود داده باینری ویس
             voice_data = await client.download_media(msg.voice, file=bytes)
             text_field = voice_data
             message_type = "voice"
@@ -169,9 +176,32 @@ async def build_message_object(msg, chat_id, chat_name):
             print("Error downloading voice for message", msg.id, ":", e)
             text_field = [msg.text] if msg.text else []
             message_type = "text"
+
+
+    elif hasattr(msg, 'video') and msg.video:
+        try:
+            video_data = await client.download_media(msg.video, file=bytes)
+            # نام فایل مطابق با msg.id، مثلاً "198.mp4"
+            file_name = f"{msg.id}.mp4"
+            # مسیر دایرکتوری ذخیره ویدیو در داخل static
+            video_dir = os.path.join(BASE_DIR, "video")
+            # در صورتی که دایرکتوری وجود ندارد، ایجاد می‌شود
+            if not os.path.exists(video_dir):
+                os.makedirs(video_dir)
+            file_path = os.path.join(video_dir, file_name)
+            with open(file_path, "wb") as f:
+                f.write(video_data)
+            # مسیر نسبی فایل برای استفاده در قالب (مثل: "video/198.mp4")
+            relative_path = os.path.join("video", file_name)
+            text_field = [file_name]
+            message_type = "video"
+        except Exception as e:
+            print("Error downloading video for message", msg.id, ":", e)
+            text_field = [msg.text] if msg.text else []
+            message_type = "text"
+
     elif msg.photo:
         try:
-            # دانلود داده باینری عکس
             photo_data = await client.download_media(msg.photo, file=bytes)
             text_field = photo_data
             message_type = "image"
@@ -179,16 +209,35 @@ async def build_message_object(msg, chat_id, chat_name):
             print("Error downloading photo for message", msg.id, ":", e)
             text_field = [msg.text] if msg.text else []
             message_type = "text"
+
+
     elif hasattr(msg, 'document') and msg.document:
         try:
-            # دانلود داده باینری فایل
             file_data = await client.download_media(msg.document, file=bytes)
-            text_field = file_data
-            message_type = "file"
+            # استخراج نام فایل
+            file_name = None
+            if hasattr(msg.document, 'attributes') and msg.document.attributes:
+                for attr in msg.document.attributes:
+                    if hasattr(attr, 'file_name'):
+                        file_name = attr.file_name
+                        break
+            if not file_name and hasattr(msg.document, 'file_name') and msg.document.file_name:
+                file_name = msg.document.file_name
+            if not file_name and msg.document.mime_type == "application/x-tgsticker":
+                file_name = "AnimatedSticker.tgs"
+            if not file_name:
+                file_name = "unknown_filename"
+            # تعیین نوع پیام بر اساس پسوند
+            if file_name.lower().endswith('.mp3'):
+                message_type = "music"
+            else:
+                message_type = "file"
+            text_field = [file_name, file_data]
         except Exception as e:
             print("Error downloading file for message", msg.id, ":", e)
             text_field = [msg.text] if msg.text else []
             message_type = "text"
+
     else:
         text_field = [msg.text] if msg.text else []
         message_type = "text"
@@ -198,17 +247,17 @@ async def build_message_object(msg, chat_id, chat_name):
         "chat_name": chat_name,
         "message_id": msg.id,
         "sender_id": msg.sender_id,
-        "username": [],  # در صورت نیاز می‌توانید اطلاعات بیشتری اضافه کنید
+        "username": [],
         "sender_username": getattr(msg.sender, 'username', None),
         "is_outgoing": msg.out,
-        "type": message_type,  # تنظیم نوع پیام: "text"، "image"، "voice" یا "file"
-        "text": text_field,    # داده متنی یا باینری عکس/ویس/فایل
+        "type": message_type,
+        "text": text_field,
         "date": to_shamsi(msg.date) if msg.date else None,
         "reply_to_msg_id": msg.reply_to_msg_id,
         "is_edited": bool(msg.edit_date),
         "edit_date": to_shamsi(msg.edit_date) if msg.edit_date else None,
         "redFlag": False,
-        "mantegh": [],
+        "mantegh": {},
     }
 
 
