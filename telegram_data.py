@@ -5,7 +5,6 @@ import pytz
 from telethon import TelegramClient, events
 from pymongo import MongoClient
 import jdatetime
-from django.conf import settings
 
 
 # گرفتن مسیر یک سطح بالاتر از دایرکتوری فعلی (فرض بر این است که این فایل در telegram-box/poller قرار دارد)
